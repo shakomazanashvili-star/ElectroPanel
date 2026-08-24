@@ -1,0 +1,6 @@
+{
+  "name": "ElectroPanel - DIN Rail & Breaker Wiring Workbench",
+  "description": "Interactive electrical distribution panel builder and circuit simulator with modular circuit breakers, voltage protection relays, RCD/УЗО, neutral & ground busbars, and custom wire routing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
