@@ -19,8 +19,10 @@ import {
   Building2,
   Cable,
   Package,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
+  CircuitLoad,
   Language,
   PanelThermalState,
   PlacedComponent,
@@ -30,6 +32,7 @@ import {
 import { COMPONENT_CATALOG, WIRE_COLORS } from '../data/componentCatalog';
 import { TRANSLATIONS } from '../data/translations';
 import { generatePdfFromElement } from '../engine/pdfExportEngine';
+import { exportLoadsToCsv } from '../engine/excelExportEngine';
 
 interface PdfReportModalProps {
   components: PlacedComponent[];
@@ -39,6 +42,8 @@ interface PdfReportModalProps {
   thermalState?: PanelThermalState;
   gridVoltage: number;
   numRails: number;
+  circuitLoads?: CircuitLoad[];
+  initialFilter?: 'ALL' | 'SCHEDULE_ONLY';
   onClose: () => void;
 }
 
@@ -50,10 +55,14 @@ export const PdfReportModal: React.FC<PdfReportModalProps> = ({
   thermalState,
   gridVoltage,
   numRails,
+  circuitLoads,
+  initialFilter = 'ALL',
   onClose,
 }) => {
   const t = TRANSLATIONS[lang];
   const reportRef = useRef<HTMLDivElement>(null);
+
+  const isScheduleOnly = initialFilter === 'SCHEDULE_ONLY';
 
   // User Customizable Report Info
   const [projectName, setProjectName] = useState<string>(
@@ -69,11 +78,12 @@ export const PdfReportModal: React.FC<PdfReportModalProps> = ({
   }));
 
   // Toggleable Sections
-  const [includeSchematic, setIncludeSchematic] = useState(true);
-  const [includeLayout, setIncludeLayout] = useState(true);
-  const [includeBom, setIncludeBom] = useState(true);
-  const [includeWiring, setIncludeWiring] = useState(true);
-  const [includeThermal, setIncludeThermal] = useState(true);
+  const [includeSchematic, setIncludeSchematic] = useState(!isScheduleOnly);
+  const [includeLayout, setIncludeLayout] = useState(!isScheduleOnly);
+  const [includeLoadSchedule, setIncludeLoadSchedule] = useState(true);
+  const [includeBom, setIncludeBom] = useState(!isScheduleOnly);
+  const [includeWiring, setIncludeWiring] = useState(!isScheduleOnly);
+  const [includeThermal, setIncludeThermal] = useState(!isScheduleOnly);
   const [includeSignoff, setIncludeSignoff] = useState(true);
 
   // Export State
@@ -84,11 +94,46 @@ export const PdfReportModal: React.FC<PdfReportModalProps> = ({
 
   const catalogMap = new Map(COMPONENT_CATALOG.map((c) => [c.type, c]));
 
+  // Calculate Effective Circuit Loads
+  const effectiveLoads: CircuitLoad[] = (circuitLoads && circuitLoads.length > 0)
+    ? circuitLoads
+    : components
+        .filter((c) => c.typeId.startsWith('LOAD_') || c.typeId.startsWith('MCB_1P_'))
+        .map((comp, idx) => {
+          const isLoad = comp.typeId.startsWith('LOAD_');
+          const power = comp.customPowerW || (isLoad ? 1500 : 1000);
+          return {
+            id: `derived-load-${comp.id}`,
+            circuitCode: `Q${idx + 1}`,
+            name: comp.customLabel || (isLoad ? 'მომხმარებელი' : `წრედი ${idx + 1}`),
+            room: 'საცხოვრებელი ზონა',
+            category: (comp.typeId.includes('LIGHT')
+              ? 'LIGHTING'
+              : comp.typeId.includes('AC')
+              ? 'AC_CLIMATE'
+              : comp.typeId.includes('BOILER')
+              ? 'HEATING_BOILER'
+              : 'SOCKETS') as any,
+            powerW: power,
+            voltageV: gridVoltage || 230,
+            cosPhi: 0.95,
+            breakerRatingA: comp.customCurrentA || 16,
+            wireGaugeMm2: (comp.customCurrentA || 16) <= 10 ? 1.5 : (comp.customCurrentA || 16) <= 20 ? 2.5 : 4.0,
+            cableType: (comp.customCurrentA || 16) <= 10 ? 'NYM 3x1.5' : 'NYM 3x2.5',
+            demandFactor: 0.8,
+            isActive: true,
+          };
+        });
+
   // Calculate Metrics
   const totalDinUnits = components.reduce((sum, comp) => {
     const meta = catalogMap.get(comp.typeId);
     return sum + (meta?.dinUnits || 1);
   }, 0);
+
+  const handleDownloadScheduleCsv = () => {
+    exportLoadsToCsv(effectiveLoads, lang);
+  };
 
   // Group components by Rail
   const rails: { id: string; label: string; components: PlacedComponent[] }[] = [];
@@ -228,6 +273,17 @@ export const PdfReportModal: React.FC<PdfReportModalProps> = ({
           {/* Action Buttons */}
           <div className="flex items-center flex-wrap gap-2">
             <button
+              id="pdf-download-schedule-csv-btn"
+              onClick={handleDownloadScheduleCsv}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500/40 text-xs font-bold transition shadow-md shadow-emerald-950/40 cursor-pointer"
+              title={lang === 'ka' ? 'დატვირთვების სრული გრაფის ჩამოტვირთვა (.csv - Excel)' : 'Download Circuit Load Schedule as Excel-compatible CSV'}
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-100" />
+              <span className="hidden sm:inline">{lang === 'ka' ? 'დატვირთვების CSV (Excel)' : 'Download Schedule (.csv)'}</span>
+              <span className="sm:hidden">CSV</span>
+            </button>
+
+            <button
               onClick={handleCopyTextReport}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition cursor-pointer"
               title="Copy text summary"
@@ -304,6 +360,45 @@ export const PdfReportModal: React.FC<PdfReportModalProps> = ({
 
           {/* Section Toggles */}
           <div className="flex items-center flex-wrap gap-3 text-[11px] text-slate-300 font-medium">
+            <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-0.5 mr-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setIncludeSchematic(true);
+                  setIncludeLayout(true);
+                  setIncludeLoadSchedule(true);
+                  setIncludeBom(true);
+                  setIncludeWiring(true);
+                  setIncludeThermal(true);
+                }}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold transition ${
+                  includeSchematic && includeLayout && includeBom && includeWiring && includeThermal
+                    ? 'bg-amber-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {lang === 'ka' ? 'სრული ანგარიში' : 'Full Report'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIncludeSchematic(false);
+                  setIncludeLayout(false);
+                  setIncludeLoadSchedule(true);
+                  setIncludeBom(false);
+                  setIncludeWiring(false);
+                  setIncludeThermal(false);
+                }}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold transition ${
+                  !includeSchematic && !includeLayout && !includeBom && !includeWiring && !includeThermal && includeLoadSchedule
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {lang === 'ka' ? 'მხოლოდ დატვირთვები' : 'Schedule Only'}
+              </button>
+            </div>
+
             <label className="flex items-center gap-1.5 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -322,6 +417,16 @@ export const PdfReportModal: React.FC<PdfReportModalProps> = ({
                 className="accent-amber-500 rounded"
               />
               <span>{t.includeLayout}</span>
+            </label>
+
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={includeLoadSchedule}
+                onChange={(e) => setIncludeLoadSchedule(e.target.checked)}
+                className="accent-amber-500 rounded"
+              />
+              <span>{t.includeLoadSchedule || (lang === 'ka' ? 'დატვირთვების ცხრილი' : 'Load Schedule')}</span>
             </label>
 
             <label className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -629,6 +734,94 @@ export const PdfReportModal: React.FC<PdfReportModalProps> = ({
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* 4b. CIRCUIT & LOAD SCHEDULE (მომხმარებლებისა და დატვირთვების გრაფა) */}
+            {includeLoadSchedule && (
+              <div className="page-break-inside-avoid flex flex-col gap-3">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-1">
+                  <h2 className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                    {lang === 'ka'
+                      ? 'მომხმარებლებისა და წრედების დატვირთვის გრაფა (Circuit Load Schedule)'
+                      : 'Circuit Load Schedule & Power Sizing Directory'}
+                  </h2>
+                  <button
+                    onClick={handleDownloadScheduleCsv}
+                    className="no-print flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold transition cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{lang === 'ka' ? 'Excel / CSV ჩამოტვირთვა' : 'Download CSV'}</span>
+                  </button>
+                </div>
+
+                <div className="border border-slate-300 rounded-xl overflow-hidden shadow-sm">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-100 text-slate-700 border-b border-slate-300 font-mono text-[11px]">
+                      <tr>
+                        <th className="p-2">#</th>
+                        <th className="p-2">{lang === 'ka' ? 'კოდი' : 'Code'}</th>
+                        <th className="p-2">{lang === 'ka' ? 'დანიშნულება / მომხმარებელი' : 'Description'}</th>
+                        <th className="p-2">{lang === 'ka' ? 'ოთახი' : 'Room'}</th>
+                        <th className="p-2 text-right">{lang === 'ka' ? 'სიმძლავრე' : 'Power (W)'}</th>
+                        <th className="p-2 text-right">{lang === 'ka' ? 'დენი (A)' : 'Current (A)'}</th>
+                        <th className="p-2">{lang === 'ka' ? 'ავტომატი' : 'Breaker'}</th>
+                        <th className="p-2">{lang === 'ka' ? 'კაბელი' : 'Cable'}</th>
+                        <th className="p-2 text-right">{lang === 'ka' ? 'Kc' : 'Kc'}</th>
+                        <th className="p-2 text-right">{lang === 'ka' ? 'გათვლილი (kW)' : 'Design (kW)'}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 text-slate-800">
+                      {effectiveLoads.map((load, idx) => {
+                        const powerW = load.powerW || 0;
+                        const volt = load.voltageV || 230;
+                        const cosPhi = load.cosPhi || 0.95;
+                        const currentA = (powerW / (volt * cosPhi)).toFixed(1);
+                        const demandFactor = load.demandFactor || 1.0;
+                        const designKw = ((powerW * demandFactor) / 1000).toFixed(2);
+
+                        return (
+                          <tr key={load.id || idx} className="hover:bg-slate-50">
+                            <td className="p-2 font-mono text-slate-500 text-[10px]">{idx + 1}</td>
+                            <td className="p-2 font-mono font-bold text-amber-900">{load.circuitCode || `Q${idx + 1}`}</td>
+                            <td className="p-2 font-semibold text-slate-900">{load.name}</td>
+                            <td className="p-2 text-slate-600 text-[11px]">{load.room}</td>
+                            <td className="p-2 text-right font-mono font-bold text-slate-900">{powerW} W</td>
+                            <td className="p-2 text-right font-mono text-blue-900 font-bold">{currentA} A</td>
+                            <td className="p-2 font-mono text-[11px] text-amber-800 font-bold">
+                              {load.breakerRatingA ? `C${load.breakerRatingA}` : 'C16'}
+                            </td>
+                            <td className="p-2 font-mono text-[11px] text-slate-700">
+                              {load.wireGaugeMm2 || 2.5} მმ² ({load.cableType || 'NYM'})
+                            </td>
+                            <td className="p-2 text-right font-mono text-slate-600">{demandFactor}</td>
+                            <td className="p-2 text-right font-mono font-black text-emerald-800">{designKw} kW</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot className="bg-slate-50 border-t-2 border-slate-300 font-mono text-[11px] text-slate-900 font-bold">
+                      <tr>
+                        <td colSpan={4} className="p-2.5 text-right uppercase text-slate-600">
+                          {lang === 'ka' ? 'ჯამური მაჩვენებლები:' : 'Schedule Summary Totals:'}
+                        </td>
+                        <td className="p-2.5 text-right text-slate-950 font-black">
+                          {(effectiveLoads.reduce((s, l) => s + (l.powerW || 0), 0) / 1000).toFixed(2)} kW
+                        </td>
+                        <td className="p-2.5 text-right text-blue-950 font-black">
+                          {effectiveLoads.reduce((s, l) => s + (l.powerW || 0) / ((l.voltageV || 230) * (l.cosPhi || 0.95)), 0).toFixed(1)} A
+                        </td>
+                        <td colSpan={3} className="p-2.5 text-right text-slate-600 text-[10px]">
+                          {lang === 'ka' ? 'საანგარიშო დატვირთვა Kc-ით:' : 'Total Design Load:'}
+                        </td>
+                        <td className="p-2.5 text-right text-emerald-950 font-black">
+                          {(effectiveLoads.reduce((s, l) => s + ((l.powerW || 0) * (l.demandFactor || 1.0)), 0) / 1000).toFixed(2)} kW
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
                 </div>
               </div>
             )}

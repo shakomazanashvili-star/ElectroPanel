@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   MousePointer,
+  CheckSquare,
   Cable,
   Scissors,
   HelpCircle,
@@ -9,12 +10,17 @@ import {
   Sliders,
   Sparkles,
   Flame,
+  Route,
+  Layers,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   ActiveTool,
   Language,
   WireColorType,
   WireGauge,
+  WireRoutingState,
+  WireRoutingStyle,
 } from '../types';
 import { WIRE_COLORS, WIRE_GAUGES } from '../data/componentCatalog';
 import { TRANSLATIONS } from '../data/translations';
@@ -33,6 +39,11 @@ interface WireControlBarProps {
   onOpenConnectionManager?: () => void;
   isThermalActive?: boolean;
   onToggleThermal?: () => void;
+  routingState?: WireRoutingState;
+  onAutoRouteWires?: () => void;
+  onChangeRoutingStyle?: (style: WireRoutingStyle) => void;
+  onToggleCableDucts?: () => void;
+  onOpenWireOptimizer?: () => void;
 }
 
 export const WireControlBar: React.FC<WireControlBarProps> = ({
@@ -49,60 +60,160 @@ export const WireControlBar: React.FC<WireControlBarProps> = ({
   onOpenConnectionManager,
   isThermalActive,
   onToggleThermal,
+  routingState,
+  onAutoRouteWires,
+  onChangeRoutingStyle,
+  onToggleCableDucts,
+  onOpenWireOptimizer,
 }) => {
   const t = TRANSLATIONS[lang];
+  const isAutoRouted = routingState?.isAutoRouted ?? true;
+  const currentStyle = routingState?.style ?? 'ORTHOGONAL_DUCT';
 
   return (
     <div className="bg-slate-900/95 border-b border-slate-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-slate-200 shadow-md">
-      {/* 1. Left: Main Interactive Tools */}
-      <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
-        <button
-          id="tool-select"
-          onClick={() => {
-            onCancelWiring();
-            onSelectTool('SELECT');
-          }}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-            activeTool === 'SELECT'
-              ? 'bg-amber-500 text-slate-950 shadow-sm font-bold'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-          }`}
-          title="ჩართვა/გამორთვა, გადართვა და მართვა"
-        >
-          <MousePointer className="w-4 h-4" />
-          <span>{t.toolSelect}</span>
-        </button>
+      {/* 1. Left: Main Interactive Tools & Auto-Route Button */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+          <button
+            id="tool-select"
+            onClick={() => {
+              onCancelWiring();
+              onSelectTool('SELECT');
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+              activeTool === 'SELECT'
+                ? 'bg-amber-500 text-slate-950 shadow-sm font-bold'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            }`}
+            title={lang === 'ka' ? 'ჩართვა/გამორთვა, გადართვა და მართვა' : 'Operate and switch individual devices'}
+          >
+            <MousePointer className="w-4 h-4" />
+            <span>{t.toolSelect}</span>
+          </button>
 
-        <button
-          id="tool-wire"
-          onClick={() => onSelectTool('WIRE')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-            activeTool === 'WIRE'
-              ? 'bg-amber-500 text-slate-950 shadow-sm font-bold'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-          }`}
-          title="მავთულის გაყვანა ტერმინალებს შორის"
-        >
-          <Cable className="w-4 h-4" />
-          <span>{t.toolWire}</span>
-        </button>
+          <button
+            id="tool-multi-select"
+            onClick={() => {
+              onCancelWiring();
+              onSelectTool('MULTI_SELECT');
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+              activeTool === 'MULTI_SELECT'
+                ? 'bg-indigo-600 text-white shadow-sm font-bold ring-1 ring-indigo-400'
+                : 'text-slate-400 hover:text-indigo-300 hover:bg-slate-800'
+            }`}
+            title={t.multiSelectHelp}
+          >
+            <CheckSquare className="w-4 h-4 text-indigo-300" />
+            <span>{t.toolMultiSelect}</span>
+          </button>
 
-        <button
-          id="tool-delete-wire"
-          onClick={() => {
-            onCancelWiring();
-            onSelectTool('DELETE_WIRE');
-          }}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-            activeTool === 'DELETE_WIRE'
-              ? 'bg-rose-600 text-white shadow-sm font-bold'
-              : 'text-slate-400 hover:text-rose-300 hover:bg-slate-800'
-          }`}
-          title="მავთულზე დაკლიკებით წაშლა"
-        >
-          <Scissors className="w-4 h-4" />
-          <span>{t.toolDeleteWire}</span>
-        </button>
+          <button
+            id="tool-wire"
+            onClick={() => onSelectTool('WIRE')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+              activeTool === 'WIRE'
+                ? 'bg-amber-500 text-slate-950 shadow-sm font-bold'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            }`}
+            title="მავთულის გაყვანა ტერმინალებს შორის"
+          >
+            <Cable className="w-4 h-4" />
+            <span>{t.toolWire}</span>
+          </button>
+
+          <button
+            id="tool-delete-wire"
+            onClick={() => {
+              onCancelWiring();
+              onSelectTool('DELETE_WIRE');
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+              activeTool === 'DELETE_WIRE'
+                ? 'bg-rose-600 text-white shadow-sm font-bold'
+                : 'text-slate-400 hover:text-rose-300 hover:bg-slate-800'
+            }`}
+            title="მავთულზე დაკლიკებით წაშლა"
+          >
+            <Scissors className="w-4 h-4" />
+            <span>{t.toolDeleteWire}</span>
+          </button>
+        </div>
+
+        {/* 🌟 AUTO-ROUTE WIRES BUTTON & STYLES */}
+        {onAutoRouteWires && (
+          <div className="flex items-center gap-1 bg-slate-950/90 p-1 rounded-xl border border-cyan-500/30 shadow-inner">
+            <button
+              id="btn-auto-route-wires"
+              onClick={onAutoRouteWires}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                isAutoRouted
+                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-950/50 hover:brightness-110'
+                  : 'bg-slate-800 hover:bg-slate-700 text-cyan-300'
+              }`}
+              title={t.autoRouteWiresDesc}
+            >
+              <Route className="w-4 h-4 text-cyan-200" />
+              <span>{t.autoRouteWiresBtn}</span>
+              {isAutoRouted && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              )}
+            </button>
+
+            {/* Routing Style Quick Selector */}
+            {onChangeRoutingStyle && isAutoRouted && (
+              <div className="flex items-center gap-0.5 px-1">
+                <button
+                  onClick={() => onChangeRoutingStyle('ORTHOGONAL_DUCT')}
+                  className={`px-2 py-1 rounded text-[11px] font-medium transition cursor-pointer ${
+                    currentStyle === 'ORTHOGONAL_DUCT'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title={t.styleDuct}
+                >
+                  {lang === 'ka' ? 'არხები' : 'Ducts'}
+                </button>
+                <button
+                  onClick={() => onChangeRoutingStyle('SMOOTH_BUNDLE')}
+                  className={`px-2 py-1 rounded text-[11px] font-medium transition cursor-pointer ${
+                    currentStyle === 'SMOOTH_BUNDLE'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title={t.styleSmooth}
+                >
+                  {lang === 'ka' ? 'კონტურები' : 'Smooth'}
+                </button>
+                <button
+                  onClick={() => onChangeRoutingStyle('DIRECT')}
+                  className={`px-2 py-1 rounded text-[11px] font-medium transition cursor-pointer ${
+                    currentStyle === 'DIRECT'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title={t.styleDirect}
+                >
+                  {lang === 'ka' ? 'პირდაპირი' : 'Direct'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ⚡ WIRE LENGTH OPTIMIZATION BUTTON */}
+        {onOpenWireOptimizer && (
+          <button
+            id="btn-wire-length-optimizer"
+            onClick={onOpenWireOptimizer}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 via-yellow-500/10 to-amber-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 text-amber-300 border border-amber-400/50 hover:border-amber-400 text-xs font-bold transition shadow-sm cursor-pointer"
+            title={t.wireOptimizerQuickTip}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400 fill-current animate-pulse" />
+            <span>{t.wireOptimizerBtn}</span>
+          </button>
+        )}
       </div>
 
       {/* 2. Middle: Wire Colors & Gauge */}
@@ -213,8 +324,14 @@ export const WireControlBar: React.FC<WireControlBarProps> = ({
             </span>
           </div>
         ) : (
-          <div className="text-xs text-slate-400 font-mono hidden md:block">
-            {lang === 'ka' ? `გაყვანილია: ${wireCount} მავთული` : `Total Wires: ${wireCount}`}
+          <div className="flex items-center gap-2 text-xs text-slate-400 font-mono hidden md:flex">
+            <span>{lang === 'ka' ? `გაყვანილია: ${wireCount}` : `Total: ${wireCount}`}</span>
+            {isAutoRouted && wireCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/80 text-[10px] font-sans flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <span>0 Overlaps</span>
+              </span>
+            )}
           </div>
         )}
       </div>

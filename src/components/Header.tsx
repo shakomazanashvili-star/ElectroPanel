@@ -6,6 +6,7 @@ import {
   Upload,
   LayoutGrid,
   FileText,
+  FileSpreadsheet,
   Sliders,
   Sparkles,
   Layers,
@@ -14,6 +15,9 @@ import {
   Globe,
   SlidersHorizontal,
   Monitor,
+  Route,
+  Home,
+  QrCode,
 } from 'lucide-react';
 import { Language, PanelConfig } from '../types';
 import { TRANSLATIONS } from '../data/translations';
@@ -22,8 +26,8 @@ import { PRESETS } from '../data/presets';
 interface HeaderProps {
   lang: Language;
   onToggleLang: () => void;
-  activeView: 'PANEL' | 'SCHEMATIC' | 'BOM';
-  onChangeView: (view: 'PANEL' | 'SCHEMATIC' | 'BOM') => void;
+  activeView: 'PANEL' | 'FLOORPLAN' | 'SCHEDULE' | 'SCHEMATIC' | 'BOM';
+  onChangeView: (view: 'PANEL' | 'FLOORPLAN' | 'SCHEDULE' | 'SCHEMATIC' | 'BOM') => void;
   gridPowerOn: boolean;
   onTogglePower: () => void;
   gridVoltage: number;
@@ -31,10 +35,18 @@ interface HeaderProps {
   onSelectPreset: (preset: PanelConfig) => void;
   onClearAll: () => void;
   onAutoWire: () => void;
+  onAutoRouteWires?: () => void;
+  isAutoRouted?: boolean;
   onExportJson: () => void;
   onImportJson: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onOpenPdfReport?: () => void;
   onOpenWindowsModal?: () => void;
+  onOpenPanelAssembly?: () => void;
+  onOpenWireOptimizer?: () => void;
+  onOpenQrCode?: () => void;
+  customPresets?: PanelConfig[];
+  onSaveCurrentAsPreset?: () => void;
+  onDeleteCustomPreset?: (id: string) => void;
   totalPowerW: number;
   totalCurrentA: number;
   hasAlerts: boolean;
@@ -52,10 +64,18 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectPreset,
   onClearAll,
   onAutoWire,
+  onAutoRouteWires,
+  isAutoRouted,
   onExportJson,
   onImportJson,
   onOpenPdfReport,
   onOpenWindowsModal,
+  onOpenPanelAssembly,
+  onOpenWireOptimizer,
+  onOpenQrCode,
+  customPresets = [],
+  onSaveCurrentAsPreset,
+  onDeleteCustomPreset,
   totalPowerW,
   totalCurrentA,
   hasAlerts,
@@ -100,6 +120,32 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <LayoutGrid className="w-4 h-4" />
             <span>{t.buildMode}</span>
+          </button>
+          <button
+            id="view-btn-floorplan"
+            onClick={() => onChangeView('FLOORPLAN')}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              activeView === 'FLOORPLAN'
+                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/25'
+                : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+            }`}
+            title={lang === 'ka' ? 'ოთახების, ჩამრთველების, შტეფსელებისა და კოლოფების ელექტრო ნახაზი' : 'Floor Plan Blueprint & Electrical Device Layout'}
+          >
+            <Home className="w-4 h-4" />
+            <span>{t.floorPlanMode || (lang === 'ka' ? 'ოთახების ნახაზი' : 'Floor Plan')}</span>
+          </button>
+          <button
+            id="view-btn-schedule"
+            onClick={() => onChangeView('SCHEDULE')}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              activeView === 'SCHEDULE'
+                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/25'
+                : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+            }`}
+            title={lang === 'ka' ? 'მომხმარებლებისა და დატვირთვების გრაფა / ცხრილი (Excel / PDF ექსპორტი)' : 'Circuit & Load Schedule (Excel / PDF Export)'}
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>{t.loadScheduleMode}</span>
           </button>
           <button
             id="view-btn-schematic"
@@ -161,15 +207,67 @@ export const Header: React.FC<HeaderProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
               <span className="hidden md:inline">{t.presets}</span>
             </button>
-            <div className="absolute right-0 mt-1 w-64 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1.5 hidden group-hover:block z-50">
-              <div className="px-3 py-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-700/60">
+            <div className="absolute right-0 mt-1 w-72 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1.5 hidden group-hover:block z-50 max-h-96 overflow-y-auto">
+              {onSaveCurrentAsPreset && (
+                <div className="p-2 border-b border-slate-800">
+                  <button
+                    onClick={onSaveCurrentAsPreset}
+                    className="w-full py-1.5 px-2.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-amber-300 text-xs font-bold transition flex items-center justify-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>{lang === 'ka' ? '+ შაბლონად შენახვა' : '+ Save as Preset'}</span>
+                  </button>
+                </div>
+              )}
+
+              {customPresets.length > 0 && (
+                <>
+                  <div className="px-3 py-1 text-[11px] font-bold text-amber-400 uppercase tracking-wider border-b border-slate-800 bg-amber-500/10">
+                    {lang === 'ka' ? 'ჩემი შაბლონები' : 'My Saved Presets'} ({customPresets.length})
+                  </div>
+                  {customPresets.map((p) => (
+                    <div
+                      key={p.id}
+                      className="group/item flex items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 transition border-b border-slate-800/40"
+                    >
+                      <button
+                        onClick={() => onSelectPreset(p)}
+                        className="flex-1 text-left flex flex-col gap-0.5"
+                      >
+                        <span className="font-semibold text-amber-200 flex items-center gap-1">
+                          ⭐ {p.name}
+                        </span>
+                        <span className="text-[10px] text-slate-400 line-clamp-1">
+                          {p.descriptionKa || p.descriptionEn}
+                        </span>
+                      </button>
+                      {onDeleteCustomPreset && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(lang === 'ka' ? `წავშალოთ შაბლონი "${p.name}"?` : `Delete preset "${p.name}"?`)) {
+                              onDeleteCustomPreset(p.id);
+                            }
+                          }}
+                          className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded transition opacity-0 group-hover/item:opacity-100"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
+
+              <div className="px-3 py-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800">
                 {t.presets}
               </div>
               {PRESETS.map((p) => (
                 <button
                   key={p.id}
                   onClick={() => onSelectPreset(p)}
-                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-700/70 hover:text-amber-300 transition flex flex-col gap-0.5"
+                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-amber-300 transition flex flex-col gap-0.5"
                 >
                   <span className="font-medium">{lang === 'ka' ? p.name : p.name}</span>
                   <span className="text-[10px] text-slate-400 line-clamp-1">
@@ -179,6 +277,19 @@ export const Header: React.FC<HeaderProps> = ({
               ))}
             </div>
           </div>
+
+          {/* Panel Auto-Builder from Breaker List & Excel */}
+          {onOpenPanelAssembly && (
+            <button
+              id="btn-panel-auto-builder"
+              onClick={onOpenPanelAssembly}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-emerald-600/30 to-teal-600/30 hover:from-emerald-600/40 hover:to-teal-600/40 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition cursor-pointer shadow-sm"
+              title={t.panelAutoBuilderDesc}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">{t.panelAutoBuilder}</span>
+            </button>
+          )}
 
           {/* Auto Wire Helper */}
           <button
@@ -191,6 +302,36 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="hidden lg:inline">{t.autoRoute}</span>
           </button>
 
+          {/* Auto-Route Wires Button (Pathfinding) */}
+          {onAutoRouteWires && (
+            <button
+              id="header-btn-auto-route-wires"
+              onClick={onAutoRouteWires}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shadow-sm ${
+                isAutoRouted
+                  ? 'bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-400/50'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+              }`}
+              title={t.autoRouteWiresDesc}
+            >
+              <Route className={`w-3.5 h-3.5 ${isAutoRouted ? 'text-cyan-400' : 'text-slate-400'}`} />
+              <span className="hidden sm:inline">{t.autoRouteWiresBtn}</span>
+            </button>
+          )}
+
+          {/* Wire Length Optimizer */}
+          {onOpenWireOptimizer && (
+            <button
+              id="header-btn-wire-optimizer"
+              onClick={onOpenWireOptimizer}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-400/30 text-xs font-semibold transition cursor-pointer shadow-sm"
+              title={t.wireOptimizerQuickTip}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 fill-current" />
+              <span className="hidden sm:inline font-bold">{t.wireOptimizerBtn}</span>
+            </button>
+          )}
+
           {/* PDF Report Export */}
           {onOpenPdfReport && (
             <button
@@ -201,6 +342,19 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <FileText className="w-3.5 h-3.5 text-amber-400" />
               <span className="hidden sm:inline font-bold">{lang === 'ka' ? 'PDF რეპორტი' : 'PDF Report'}</span>
+            </button>
+          )}
+
+          {/* QR Code Passport */}
+          {onOpenQrCode && (
+            <button
+              id="btn-qr-passport"
+              onClick={onOpenQrCode}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-400/30 text-xs font-semibold transition cursor-pointer shadow-sm"
+              title={lang === 'ka' ? 'ფარის QR პასპორტი & სტიკერი' : 'Panel QR Passport & Sticker'}
+            >
+              <QrCode className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline font-bold">{lang === 'ka' ? 'QR პასპორტი' : 'QR Passport'}</span>
             </button>
           )}
 

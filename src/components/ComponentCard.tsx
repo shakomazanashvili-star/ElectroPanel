@@ -12,6 +12,10 @@ import {
   Tv,
   Shield,
   Cable,
+  Check,
+  CheckSquare,
+  Square,
+  Copy,
 } from 'lucide-react';
 import {
   ActiveTool,
@@ -35,12 +39,16 @@ interface ComponentCardProps {
   thermalData?: ComponentThermalData;
   isThermalMode?: boolean;
   thermalPalette?: ThermalPalette;
+  isSelected?: boolean;
+  isMultiSelectMode?: boolean;
+  onToggleSelect?: (componentId: string, event: React.MouseEvent) => void;
   onInspectThermal?: (component: PlacedComponent) => void;
   onTerminalClick: (componentId: string, terminal: Terminal) => void;
   onToggleSwitch: (componentId: string) => void;
   onTestRcd: (componentId: string) => void;
   onDeleteComponent: (componentId: string) => void;
   onDuplicateComponent: (componentId: string) => void;
+  onCopyComponent?: (componentId: string) => void;
   onUpdateSettings: (componentId: string, settings: Partial<PlacedComponent>) => void;
   onOpenBreakerCustomizer?: (component: PlacedComponent) => void;
 }
@@ -54,12 +62,16 @@ export const ComponentCard: React.FC<ComponentCardProps> = ({
   thermalData,
   isThermalMode = false,
   thermalPalette = 'FLIR_IRONBOW',
+  isSelected = false,
+  isMultiSelectMode = false,
+  onToggleSelect,
   onInspectThermal,
   onTerminalClick,
   onToggleSwitch,
   onTestRcd,
   onDeleteComponent,
   onDuplicateComponent,
+  onCopyComponent,
   onUpdateSettings,
   onOpenBreakerCustomizer,
 }) => {
@@ -173,8 +185,16 @@ export const ComponentCard: React.FC<ComponentCardProps> = ({
 
       {/* 2. MAIN DIN DEVICE BODY */}
       <div
+        onClick={(e) => {
+          if (isMultiSelectMode || activeTool === 'MULTI_SELECT' || e.shiftKey || e.ctrlKey || e.metaKey) {
+            e.stopPropagation();
+            onToggleSelect?.(component.id, e);
+          }
+        }}
         className={`w-full rounded-xl border flex flex-col justify-between p-2 shadow-md relative select-none overflow-hidden transition-all ${
-          isHotspot
+          isSelected
+            ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-slate-950 shadow-xl shadow-indigo-600/30 border-indigo-400 scale-[1.02] bg-indigo-950/20'
+            : isHotspot
             ? 'ring-2 ring-rose-500 ring-offset-2 ring-offset-slate-950 animate-pulse'
             : ''
         } ${
@@ -185,13 +205,13 @@ export const ComponentCard: React.FC<ComponentCardProps> = ({
             : isConsumerLoad
             ? 'bg-slate-800 border-slate-700 text-slate-100'
             : 'bg-slate-100 border-slate-300 text-slate-900 shadow-slate-900/20'
-        }`}
+        } ${isMultiSelectMode || activeTool === 'MULTI_SELECT' ? 'cursor-pointer hover:border-indigo-400 hover:shadow-indigo-500/20' : ''}`}
         style={{
           minHeight: isConsumerLoad ? '140px' : '160px',
           ...(isThermalMode
             ? {
                 background: `linear-gradient(180deg, ${thermalTintBg} 0%, rgba(15, 23, 42, 0.92) 100%)`,
-                borderColor: thermalColor,
+                borderColor: isSelected ? '#818cf8' : thermalColor,
                 color: '#f8fafc',
               }
             : {}),
@@ -208,10 +228,33 @@ export const ComponentCard: React.FC<ComponentCardProps> = ({
         )}
         {/* Device Brand / Model Top Bar */}
         <div className="flex items-center justify-between border-b pb-1 mb-1 border-black/10">
-          <div className="flex items-center gap-1 overflow-hidden">
+          <div className="flex items-center gap-1.5 overflow-hidden">
+            {/* Multi-Select Checkbox Indicator */}
+            {(isMultiSelectMode || activeTool === 'MULTI_SELECT' || isSelected) && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleSelect?.(component.id, e);
+                }}
+                className={`p-0.5 rounded transition-transform cursor-pointer flex items-center justify-center shrink-0 ${
+                  isSelected
+                    ? 'bg-indigo-600 text-white shadow-sm scale-110 ring-1 ring-indigo-300'
+                    : 'bg-slate-900/60 text-slate-400 hover:text-indigo-300 hover:bg-slate-900 border border-slate-600/60'
+                }`}
+                title={isSelected ? (lang === 'ka' ? 'მონიშვნის მოხსნა' : 'Deselect') : (lang === 'ka' ? 'მონიშვნა' : 'Select')}
+              >
+                {isSelected ? <Check className="w-3 h-3 stroke-[3]" /> : <Square className="w-3 h-3" />}
+              </button>
+            )}
+
             <span
               className={`text-[9px] font-black tracking-wider uppercase truncate ${
-                isBusbar || isConsumerLoad ? 'text-slate-300' : 'text-slate-700'
+                isSelected
+                  ? 'text-indigo-400 font-bold'
+                  : isBusbar || isConsumerLoad
+                  ? 'text-slate-300'
+                  : 'text-slate-700'
               }`}
             >
               {meta.category === 'CIRCUIT_BREAKER'
@@ -256,6 +299,20 @@ export const ComponentCard: React.FC<ComponentCardProps> = ({
                 title={lang === 'ka' ? 'პარამეტრები' : 'Settings'}
               >
                 <Settings className="w-3 h-3" />
+              </button>
+            )}
+
+            {onCopyComponent && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCopyComponent(component.id);
+                }}
+                className="p-0.5 rounded hover:bg-indigo-500/30 text-indigo-400 hover:text-indigo-200 transition cursor-pointer"
+                title={lang === 'ka' ? 'კოპირება (Cmd+C)' : 'Copy (Cmd+C)'}
+              >
+                <Copy className="w-3 h-3" />
               </button>
             )}
 
@@ -427,27 +484,29 @@ export const ComponentCard: React.FC<ComponentCardProps> = ({
             </span>
           </div>
         ) : isConsumerLoad ? (
-          /* CONSUMER LOAD / APPLIANCE */
-          <div className="my-1 flex flex-col items-center justify-center gap-1 text-center">
+          /* CONSUMER LOAD / APPLIANCE TERMINAL (CLEAN INDUSTRIAL DESIGN) */
+          <div className="my-2 flex flex-col items-center justify-center gap-1.5 text-center">
             <div
-              className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
+              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
                 isEnergized
-                  ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-400/30 animate-pulse'
-                  : 'bg-slate-700 text-slate-400'
+                  ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-400/40 ring-2 ring-amber-300 ring-offset-2 ring-offset-slate-900 animate-pulse'
+                  : 'bg-slate-700/80 text-slate-400 border border-slate-600'
               }`}
             >
               <Tv className="w-5 h-5" />
             </div>
 
-            <div className="font-mono text-[10px]">
-              <span className="font-bold text-amber-300">
-                {component.customPowerW || meta.ratedPowerW || 1000} W
+            <div className="flex items-center gap-1">
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  isEnergized ? 'bg-emerald-400 animate-ping' : 'bg-slate-600'
+                }`}
+              />
+              <span className={`text-[9px] font-bold uppercase tracking-wider ${
+                isEnergized ? 'text-emerald-400' : 'text-slate-400'
+              }`}>
+                {isEnergized ? 'ACTIVE' : 'READY'}
               </span>
-              {isEnergized && (
-                <div className="text-[9px] text-emerald-400 font-bold">
-                  ⚡ {status.currentA} A
-                </div>
-              )}
             </div>
           </div>
         ) : null}

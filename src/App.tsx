@@ -3,9 +3,12 @@ import confetti from 'canvas-confetti';
 import {
   ActiveTool,
   BreakerCustomizationSettings,
+  CircuitLoad,
   ComponentMetadata,
   Language,
+  PanelClipboard,
   PanelConfig,
+  PanelPhoto,
   PanelThermalState,
   PlacedComponent,
   Terminal,
@@ -13,6 +16,8 @@ import {
   WireColorType,
   WireConnection,
   WireGauge,
+  WireRoutingState,
+  WireRoutingStyle,
 } from './types';
 import { PRESETS } from './data/presets';
 import { COMPONENT_CATALOG } from './data/componentCatalog';
@@ -25,19 +30,26 @@ import { DinRailPanel } from './components/DinRailPanel';
 import { DiagnosticsPanel } from './components/DiagnosticsPanel';
 import { SchematicView } from './components/SchematicView';
 import { BomModal } from './components/BomModal';
+import { CircuitLoadSchedule } from './components/CircuitLoadSchedule';
+import { FloorPlanDesigner } from './components/FloorPlanDesigner';
 import { BreakerCustomizerModal } from './components/BreakerCustomizerModal';
 import { ConnectionManagerModal } from './components/ConnectionManagerModal';
 import { ThermalInspectorModal } from './components/ThermalInspectorModal';
 import { PdfReportModal } from './components/PdfReportModal';
 import { WindowsUpdateModal } from './components/WindowsUpdateModal';
+import { PanelAssemblyModal } from './components/PanelAssemblyModal';
+import { WireOptimizerModal } from './components/WireOptimizerModal';
+import { PanelQrModal } from './components/PanelQrModal';
+import { TechnicianSummaryView } from './components/TechnicianSummaryView';
 
 export default function App() {
   // 1. Language & Main View state
   const [lang, setLang] = useState<Language>('ka');
-  const [activeView, setActiveView] = useState<'PANEL' | 'SCHEMATIC' | 'BOM'>('PANEL');
+  const [activeView, setActiveView] = useState<'PANEL' | 'FLOORPLAN' | 'SCHEDULE' | 'SCHEMATIC' | 'BOM'>('PANEL');
 
   // 2. Interactive Tool & Wiring state
   const [activeTool, setActiveTool] = useState<ActiveTool>('SELECT');
+  const [selectedComponentIds, setSelectedComponentIds] = useState<string[]>([]);
   const [selectedColor, setSelectedColor] = useState<WireColorType>('PHASE_BROWN');
   const [selectedGauge, setSelectedGauge] = useState<WireGauge>(2.5);
   const [wiringStartTerminal, setWiringStartTerminal] = useState<{
@@ -52,7 +64,17 @@ export default function App() {
   const [isConnectionManagerOpen, setIsConnectionManagerOpen] = useState<boolean>(false);
   const [inspectingThermalComp, setInspectingThermalComp] = useState<PlacedComponent | null>(null);
   const [isPdfReportOpen, setIsPdfReportOpen] = useState<boolean>(false);
+  const [pdfReportFilter, setPdfReportFilter] = useState<'ALL' | 'SCHEDULE_ONLY'>('ALL');
   const [isWindowsModalOpen, setIsWindowsModalOpen] = useState<boolean>(false);
+  const [isPanelAssemblyOpen, setIsPanelAssemblyOpen] = useState<boolean>(false);
+  const [isWireOptimizerOpen, setIsWireOptimizerOpen] = useState<boolean>(false);
+  const [isQrModalOpen, setIsQrModalOpen] = useState<boolean>(false);
+  const [isTechnicianSummaryOpen, setIsTechnicianSummaryOpen] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.location.search.includes('view=tech_summary');
+    }
+    return false;
+  });
 
   // 4. Grid Simulation Settings
   const [gridPowerOn, setGridPowerOn] = useState<boolean>(true);
@@ -70,6 +92,253 @@ export default function App() {
   const [numRails, setNumRails] = useState<number>(defaultPreset.numRails);
   const [components, setComponents] = useState<PlacedComponent[]>(defaultPreset.components);
   const [wires, setWires] = useState<WireConnection[]>(defaultPreset.wires);
+
+  // Custom User Presets (Persisted in localStorage)
+  const [customPresets, setCustomPresets] = useState<PanelConfig[]>(() => {
+    try {
+      const saved = localStorage.getItem('electropanel_custom_presets');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  // Clipboard State (Cmd+C / Cmd+V support for components & internal wires)
+  const [clipboard, setClipboard] = useState<PanelClipboard | null>(() => {
+    try {
+      const saved = localStorage.getItem('electropanel_clipboard');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
+  const saveClipboard = (clip: PanelClipboard | null) => {
+    setClipboard(clip);
+    try {
+      if (clip) {
+        localStorage.setItem('electropanel_clipboard', JSON.stringify(clip));
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(
+            JSON.stringify({
+              type: 'ELECTROPANEL_CLIPBOARD_V1',
+              data: clip,
+            })
+          ).catch(() => {});
+        }
+      } else {
+        localStorage.removeItem('electropanel_clipboard');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Recent Components State (Tracks last 5 components added to DIN rails to speed up panel assembly)
+  const [recentComponentTypes, setRecentComponentTypes] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('electropanel_recent_components');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed.slice(0, 5);
+      }
+    } catch (e) {
+      // fallback
+    }
+    // Default initial popular components
+    return ['MCB_1P_16A', 'MCB_1P_10A', 'RCD_2P_40A_30MA', 'VOLTAGE_RELAY', 'MCB_2P_MAIN'];
+  });
+
+  const recordRecentComponent = (componentType: string) => {
+    if (!componentType) return;
+    setRecentComponentTypes((prev) => {
+      const filtered = prev.filter((t) => t !== componentType);
+      const updated = [componentType, ...filtered].slice(0, 5);
+      try {
+        localStorage.setItem('electropanel_recent_components', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+  };
+
+  const handleClearRecentComponents = () => {
+    setRecentComponentTypes([]);
+    try {
+      localStorage.removeItem('electropanel_recent_components');
+    } catch (e) {}
+  };
+
+  const recentComponentsList = useMemo(() => {
+    return recentComponentTypes
+      .map((type) => COMPONENT_CATALOG.find((c) => c.type === type))
+      .filter((c): c is ComponentMetadata => c !== undefined);
+  }, [recentComponentTypes]);
+
+  const [projectObservations, setProjectObservations] = useState<string>(() => {
+    try {
+      return localStorage.getItem('electropanel_site_observations') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const [projectPhotos, setProjectPhotos] = useState<PanelPhoto[]>(() => {
+    try {
+      const saved = localStorage.getItem('electropanel_site_photos');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // 6a. Circuit & Consumer Load Schedule State (მომხმარებლების გრაფა / ცხრილი)
+  const [circuitLoads, setCircuitLoads] = useState<CircuitLoad[]>([
+    {
+      id: 'load-q1',
+      circuitCode: 'Q1',
+      name: 'ჭერის LED განათება',
+      room: 'მისაღები / დერეფანი',
+      category: 'LIGHTING',
+      powerW: 150,
+      voltageV: 230,
+      cosPhi: 0.95,
+      breakerId: 'mcb-light',
+      breakerRatingA: 10,
+      wireGaugeMm2: 1.5,
+      cableType: 'NYM 3x1.5',
+      demandFactor: 0.9,
+      isActive: true,
+      componentId: 'load-lights-1',
+    },
+    {
+      id: 'load-q2',
+      circuitCode: 'Q2',
+      name: 'მისაღების როზეტები',
+      room: 'მისაღები',
+      category: 'SOCKETS',
+      powerW: 1800,
+      voltageV: 230,
+      cosPhi: 0.95,
+      breakerId: 'mcb-sockets',
+      breakerRatingA: 16,
+      wireGaugeMm2: 2.5,
+      cableType: 'NYM 3x2.5',
+      demandFactor: 0.7,
+      isActive: true,
+      componentId: 'load-tv-1',
+    },
+    {
+      id: 'load-q3',
+      circuitCode: 'Q3',
+      name: 'ინვერტორული კონდიციონერი',
+      room: 'მისაღები',
+      category: 'AC_CLIMATE',
+      powerW: 1500,
+      voltageV: 230,
+      cosPhi: 0.92,
+      breakerId: 'mcb-ac',
+      breakerRatingA: 20,
+      wireGaugeMm2: 2.5,
+      cableType: 'NYM 3x2.5',
+      demandFactor: 0.8,
+      isActive: true,
+      componentId: 'load-ac-1',
+    },
+    {
+      id: 'load-q4',
+      circuitCode: 'Q4',
+      name: 'წყლის გამაცხელებელი ბოილერი',
+      room: 'აბაზანა',
+      category: 'HEATING_BOILER',
+      powerW: 2000,
+      voltageV: 230,
+      cosPhi: 1.0,
+      breakerId: 'mcb-boiler',
+      breakerRatingA: 20,
+      wireGaugeMm2: 2.5,
+      cableType: 'NYM 3x2.5',
+      demandFactor: 1.0,
+      isActive: true,
+      componentId: 'load-boiler-1',
+    },
+    {
+      id: 'load-q5',
+      circuitCode: 'Q5',
+      name: 'სარეცხი მანქანა',
+      room: 'აბაზანა / სველი წერტილი',
+      category: 'WET_ROOM',
+      powerW: 2200,
+      voltageV: 230,
+      cosPhi: 0.9,
+      breakerId: 'mcb-sockets',
+      breakerRatingA: 16,
+      wireGaugeMm2: 2.5,
+      cableType: 'NYM 3x2.5',
+      demandFactor: 0.8,
+      isActive: true,
+    },
+    {
+      id: 'load-q6',
+      circuitCode: 'Q6',
+      name: 'სამზარეულოს ჩასაშენებელი ქურა',
+      room: 'სამზარეულო',
+      category: 'KITCHEN',
+      powerW: 3500,
+      voltageV: 230,
+      cosPhi: 0.98,
+      breakerId: 'mcb-ac',
+      breakerRatingA: 20,
+      wireGaugeMm2: 4.0,
+      cableType: 'NYM 3x4.0',
+      demandFactor: 0.7,
+      isActive: true,
+    },
+  ]);
+
+  const handleUpdateLoadComponentPower = (componentId: string, powerW: number) => {
+    setComponents((prev) =>
+      prev.map((c) => (c.id === componentId ? { ...c, customPowerW: powerW } : c))
+    );
+  };
+
+  // 6b. Wire Auto-Routing State & Duct Stratification Settings
+  const [wireRoutingState, setWireRoutingState] = useState<WireRoutingState>({
+    isAutoRouted: true,
+    style: 'ORTHOGONAL_DUCT',
+    showCableDucts: true,
+    cornerRadius: 12,
+    laneSeparation: 6,
+    totalCrossingsBefore: 0,
+    totalCrossingsAfter: 0,
+    totalLengthMm: 0,
+  });
+
+  const handleAutoRouteWires = () => {
+    setWireRoutingState((prev) => ({
+      ...prev,
+      isAutoRouted: true,
+    }));
+    confetti({
+      particleCount: 50,
+      spread: 60,
+      origin: { y: 0.25 },
+    });
+  };
+
+  const handleChangeRoutingStyle = (style: WireRoutingStyle) => {
+    setWireRoutingState((prev) => ({
+      ...prev,
+      style,
+      isAutoRouted: true,
+    }));
+  };
+
+  const handleToggleCableDucts = () => {
+    setWireRoutingState((prev) => ({
+      ...prev,
+      showCableDucts: !prev.showCableDucts,
+    }));
+  };
 
   // 7. Run Live Electrical Simulation Engine
   const baseSimulationState = useMemo(() => {
@@ -219,6 +488,213 @@ export default function App() {
     setComponents((prev) => [...prev, newComp]);
   };
 
+  // Batch Delete components
+  const handleBatchDeleteComponents = (componentIds: string[]) => {
+    const idSet = new Set(componentIds);
+    setComponents((prev) => prev.filter((c) => !idSet.has(c.id)));
+    setWires((prev) =>
+      prev.filter(
+        (w) => !idSet.has(w.fromComponentId) && !idSet.has(w.toComponentId)
+      )
+    );
+    setSelectedComponentIds([]);
+  };
+
+  // Batch Duplicate components
+  const handleBatchDuplicateComponents = (componentIds: string[]) => {
+    const idSet = new Set(componentIds);
+    const toClone = components.filter((c) => idSet.has(c.id));
+    if (toClone.length === 0) return [];
+    
+    const now = Date.now();
+    const newComps: PlacedComponent[] = toClone.map((orig, index) => ({
+      ...orig,
+      id: `comp-${now}-${index}-${Math.random().toString(36).substr(2, 4)}`,
+      positionIndex: orig.positionIndex + 1,
+      customLabel: `${orig.customLabel} (Copy)`,
+    }));
+    
+    setComponents((prev) => [...prev, ...newComps]);
+    const newIds = newComps.map((c) => c.id);
+    setSelectedComponentIds(newIds);
+    return newIds;
+  };
+
+  // Clipboard: Copy selected components & their internal wires
+  const handleCopyComponents = (componentIds?: string[]) => {
+    const idsToCopy = componentIds && componentIds.length > 0 ? componentIds : selectedComponentIds;
+    if (idsToCopy.length === 0) return { count: 0, wiresCount: 0 };
+
+    const idSet = new Set(idsToCopy);
+    const compsToCopy = components.filter((c) => idSet.has(c.id));
+    if (compsToCopy.length === 0) return { count: 0, wiresCount: 0 };
+
+    // Find internal wires where BOTH fromComponentId and toComponentId are in the selection
+    const internalWires = wires.filter(
+      (w) => idSet.has(w.fromComponentId) && idSet.has(w.toComponentId)
+    );
+
+    const newClipboard: PanelClipboard = {
+      components: JSON.parse(JSON.stringify(compsToCopy)),
+      internalWires: JSON.parse(JSON.stringify(internalWires)),
+      sourceRailId: compsToCopy[0]?.railId || 'rail-1',
+      copiedAt: Date.now(),
+    };
+
+    saveClipboard(newClipboard);
+    return { count: compsToCopy.length, wiresCount: internalWires.length };
+  };
+
+  // Clipboard: Cut selected components & their internal wires
+  const handleCutComponents = (componentIds?: string[]) => {
+    const idsToCut = componentIds && componentIds.length > 0 ? componentIds : selectedComponentIds;
+    const result = handleCopyComponents(idsToCut);
+    if (result.count > 0) {
+      handleBatchDeleteComponents(idsToCut);
+    }
+    return result;
+  };
+
+  // Clipboard: Paste components & restored internal wires to a target rail
+  const handlePasteComponents = (targetRailId?: string) => {
+    if (!clipboard || !clipboard.components || clipboard.components.length === 0) {
+      return null;
+    }
+
+    const effectiveRailId = targetRailId || clipboard.sourceRailId || 'rail-1';
+    const targetRailExisting = components.filter((c) => c.railId === effectiveRailId);
+    const startPos = targetRailExisting.length;
+
+    const idMap = new Map<string, string>();
+    const timestamp = Date.now();
+
+    const newComponents: PlacedComponent[] = clipboard.components.map((orig, index) => {
+      const newId = `comp-${timestamp}-${index}-${Math.random().toString(36).substr(2, 4)}`;
+      idMap.set(orig.id, newId);
+      return {
+        ...orig,
+        id: newId,
+        railId: effectiveRailId,
+        positionIndex: startPos + index,
+        breakerSettings: orig.breakerSettings ? JSON.parse(JSON.stringify(orig.breakerSettings)) : undefined,
+        voltageRelaySettings: orig.voltageRelaySettings ? JSON.parse(JSON.stringify(orig.voltageRelaySettings)) : undefined,
+        smartRelaySettings: orig.smartRelaySettings ? JSON.parse(JSON.stringify(orig.smartRelaySettings)) : undefined,
+        isOn: orig.isOn ?? true,
+        isTripped: false,
+      };
+    });
+
+    const newWires: WireConnection[] = [];
+    if (clipboard.internalWires && clipboard.internalWires.length > 0) {
+      clipboard.internalWires.forEach((wire, wireIdx) => {
+        const newFromId = idMap.get(wire.fromComponentId);
+        const newToId = idMap.get(wire.toComponentId);
+        if (newFromId && newToId) {
+          newWires.push({
+            ...wire,
+            id: `wire-${timestamp}-${wireIdx}-${Math.random().toString(36).substr(2, 4)}`,
+            fromComponentId: newFromId,
+            toComponentId: newToId,
+          });
+        }
+      });
+    }
+
+    setComponents((prev) => [...prev, ...newComponents]);
+    if (newWires.length > 0) {
+      setWires((prev) => [...prev, ...newWires]);
+    }
+    const newIds = newComponents.map((c) => c.id);
+    setSelectedComponentIds(newIds);
+
+    confetti({
+      particleCount: 50,
+      spread: 60,
+      origin: { y: 0.4 },
+    });
+
+    return {
+      count: newComponents.length,
+      wiresCount: newWires.length,
+      railId: effectiveRailId,
+    };
+  };
+
+  // Batch Move to Rail
+  const handleBatchMoveToRail = (componentIds: string[], targetRailId: string) => {
+    const idSet = new Set(componentIds);
+    setComponents((prev) => {
+      const targetRailExisting = prev.filter((c) => c.railId === targetRailId && !idSet.has(c.id));
+      let nextPos = targetRailExisting.length;
+      return prev.map((c) => {
+        if (idSet.has(c.id)) {
+          return {
+            ...c,
+            railId: targetRailId,
+            positionIndex: nextPos++,
+          };
+        }
+        return c;
+      });
+    });
+  };
+
+  // Batch Shift Positions (Left / Right within rail)
+  const handleBatchShiftPositions = (componentIds: string[], direction: 'LEFT' | 'RIGHT') => {
+    const idSet = new Set(componentIds);
+    setComponents((prev) => {
+      const railsMap: Record<string, PlacedComponent[]> = {};
+      prev.forEach((c) => {
+        if (!railsMap[c.railId]) railsMap[c.railId] = [];
+        railsMap[c.railId].push({ ...c });
+      });
+
+      Object.keys(railsMap).forEach((railId) => {
+        const list = railsMap[railId].sort((a, b) => a.positionIndex - b.positionIndex);
+        if (direction === 'LEFT') {
+          for (let i = 1; i < list.length; i++) {
+            if (idSet.has(list[i].id) && !idSet.has(list[i - 1].id)) {
+              const temp = list[i - 1];
+              list[i - 1] = list[i];
+              list[i] = temp;
+            }
+          }
+        } else {
+          for (let i = list.length - 2; i >= 0; i--) {
+            if (idSet.has(list[i].id) && !idSet.has(list[i + 1].id)) {
+              const temp = list[i + 1];
+              list[i + 1] = list[i];
+              list[i] = temp;
+            }
+          }
+        }
+        list.forEach((c, idx) => {
+          c.positionIndex = idx;
+        });
+      });
+
+      return Object.values(railsMap).flat();
+    });
+  };
+
+  // Batch Toggle Power (All ON / All OFF)
+  const handleBatchTogglePower = (componentIds: string[], targetState?: boolean) => {
+    const idSet = new Set(componentIds);
+    setComponents((prev) =>
+      prev.map((c) => {
+        if (idSet.has(c.id)) {
+          const nextIsOn = targetState !== undefined ? targetState : !c.isOn;
+          return {
+            ...c,
+            isOn: nextIsOn,
+            isTripped: false,
+          };
+        }
+        return c;
+      })
+    );
+  };
+
   // Update component settings
   const handleUpdateSettings = (
     componentId: string,
@@ -276,6 +752,7 @@ export default function App() {
         breakerSettings: settings,
       };
 
+      recordRecentComponent(typeId);
       setComponents((prev) => [...prev, newBreaker]);
       confetti({ particleCount: 40, spread: 50 });
     }
@@ -296,6 +773,7 @@ export default function App() {
 
   // Add component from catalog to chosen rail
   const handleAddComponent = (meta: ComponentMetadata, targetRailId?: string) => {
+    recordRecentComponent(meta.type);
     const railId = targetRailId || (meta.category === 'CONSUMER_LOAD' ? `rail-${numRails}` : 'rail-1');
     const existingOnRail = components.filter((c) => c.railId === railId);
 
@@ -363,6 +841,73 @@ export default function App() {
       particleCount: 50,
       spread: 60,
       origin: { y: 0.2 },
+    });
+  };
+
+  // Save current panel as custom preset
+  const handleSaveCurrentAsPreset = () => {
+    const defaultName =
+      lang === 'ka'
+        ? `ჩემი შაბლონი #${customPresets.length + 1}`
+        : `My Custom Preset #${customPresets.length + 1}`;
+    const name = window.prompt(
+      lang === 'ka' ? 'შეიყვანეთ შაბლონის სახელი:' : 'Enter template preset name:',
+      defaultName
+    );
+    if (!name || !name.trim()) return;
+
+    const newPreset: PanelConfig = {
+      id: `custom-preset-${Date.now()}`,
+      name: name.trim(),
+      descriptionKa: `მორგებული შაბლონი (${components.length} მოწყობილობა, ${wires.length} შეერთება)`,
+      descriptionEn: `Custom preset (${components.length} devices, ${wires.length} wires)`,
+      numRails,
+      isThreePhase: components.some((c) => c.typeId.includes('3P') || c.typeId.includes('4P')),
+      components: JSON.parse(JSON.stringify(components)),
+      wires: JSON.parse(JSON.stringify(wires)),
+    };
+
+    const updated = [newPreset, ...customPresets];
+    setCustomPresets(updated);
+    try {
+      localStorage.setItem('electropanel_custom_presets', JSON.stringify(updated));
+    } catch (e) {
+      console.error(e);
+    }
+
+    confetti({ particleCount: 60, spread: 60 });
+  };
+
+  // Delete custom preset
+  const handleDeleteCustomPreset = (presetId: string) => {
+    const updated = customPresets.filter((p) => p.id !== presetId);
+    setCustomPresets(updated);
+    try {
+      localStorage.setItem('electropanel_custom_presets', JSON.stringify(updated));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Assembled Panel from Breakers List / Excel Auto-Builder
+  const handleApplyAssembledPanel = (result: {
+    components: PlacedComponent[];
+    wires: WireConnection[];
+    circuitLoads: CircuitLoad[];
+    numRails: number;
+  }) => {
+    setComponents(result.components);
+    setWires(result.wires);
+    setCircuitLoads(result.circuitLoads);
+    setNumRails(result.numRails);
+    setSelectedComponentIds([]);
+    setWiringStartTerminal(null);
+    setActiveView('PANEL');
+
+    confetti({
+      particleCount: 80,
+      spread: 70,
+      origin: { y: 0.6 },
     });
   };
 
@@ -531,6 +1076,19 @@ export default function App() {
     });
   };
 
+  // Apply Wire Length Optimization Result
+  const handleApplyWireOptimization = (optimizedComponents: PlacedComponent[]) => {
+    setComponents(optimizedComponents);
+    setSelectedComponentIds([]);
+
+    // Trigger visual celebration
+    confetti({
+      particleCount: 80,
+      spread: 80,
+      origin: { y: 0.4 },
+    });
+  };
+
   // Export JSON
   const handleExportJson = () => {
     const config: PanelConfig = {
@@ -588,10 +1146,18 @@ export default function App() {
         onSelectPreset={handleSelectPreset}
         onClearAll={handleClearAll}
         onAutoWire={handleAutoWire}
+        onAutoRouteWires={handleAutoRouteWires}
+        isAutoRouted={wireRoutingState.isAutoRouted}
         onExportJson={handleExportJson}
         onImportJson={handleImportJson}
         onOpenPdfReport={() => setIsPdfReportOpen(true)}
         onOpenWindowsModal={() => setIsWindowsModalOpen(true)}
+        onOpenPanelAssembly={() => setIsPanelAssemblyOpen(true)}
+        onOpenWireOptimizer={() => setIsWireOptimizerOpen(true)}
+        onOpenQrCode={() => setIsQrModalOpen(true)}
+        customPresets={customPresets}
+        onSaveCurrentAsPreset={handleSaveCurrentAsPreset}
+        onDeleteCustomPreset={handleDeleteCustomPreset}
         totalPowerW={simulationState.totalPowerW}
         totalCurrentA={simulationState.totalCurrentA}
         hasAlerts={simulationState.safetyAlerts.some((a) => a.level === 'CRITICAL' || a.level === 'WARNING')}
@@ -613,6 +1179,11 @@ export default function App() {
           onOpenConnectionManager={() => setIsConnectionManagerOpen(true)}
           isThermalActive={isThermalOverlayActive}
           onToggleThermal={() => setIsThermalOverlayActive((prev) => !prev)}
+          routingState={wireRoutingState}
+          onAutoRouteWires={handleAutoRouteWires}
+          onChangeRoutingStyle={handleChangeRoutingStyle}
+          onToggleCableDucts={handleToggleCableDucts}
+          onOpenWireOptimizer={() => setIsWireOptimizerOpen(true)}
         />
       )}
 
@@ -628,6 +1199,8 @@ export default function App() {
                 setIsCreatingNewBreaker(true);
                 setCustomizingBreaker(null);
               }}
+              recentComponents={recentComponentsList}
+              onClearRecent={handleClearRecentComponents}
             />
 
             {/* Center: Interactive DIN Rail Canvas */}
@@ -639,11 +1212,24 @@ export default function App() {
               onRemoveRail={handleRemoveRail}
               lang={lang}
               activeTool={activeTool}
+              selectedComponentIds={selectedComponentIds}
+              onSelectComponentIds={setSelectedComponentIds}
+              onBatchDeleteComponents={handleBatchDeleteComponents}
+              onBatchDuplicateComponents={handleBatchDuplicateComponents}
+              onBatchMoveToRail={handleBatchMoveToRail}
+              onBatchShiftPositions={handleBatchShiftPositions}
+              onBatchTogglePower={handleBatchTogglePower}
+              clipboard={clipboard}
+              onCopyComponents={handleCopyComponents}
+              onCutComponents={handleCutComponents}
+              onPasteComponents={handlePasteComponents}
+              onCopyComponent={(id) => handleCopyComponents([id])}
               simulationState={simulationState}
               wiringStartTerminal={wiringStartTerminal}
               selectedColor={selectedColor}
               selectedGauge={selectedGauge}
               thermalState={thermalState}
+              routingState={wireRoutingState}
               onToggleThermalOverlay={() => setIsThermalOverlayActive((prev) => !prev)}
               onChangeThermalPalette={setThermalPalette}
               onChangeThermalOpacity={setThermalOpacity}
@@ -675,13 +1261,45 @@ export default function App() {
           </>
         )}
 
+        {activeView === 'FLOORPLAN' && (
+          <FloorPlanDesigner
+            lang={lang}
+            existingLoads={circuitLoads}
+            onSyncToCircuitSchedule={(newLoads) => {
+              setCircuitLoads(newLoads);
+              setActiveView('SCHEDULE');
+            }}
+          />
+        )}
+
+        {activeView === 'SCHEDULE' && (
+          <CircuitLoadSchedule
+            loads={circuitLoads}
+            components={components}
+            wires={wires}
+            lang={lang}
+            simulationState={simulationState}
+            gridVoltage={gridVoltage}
+            onUpdateLoads={setCircuitLoads}
+            onUpdateComponentPower={handleUpdateLoadComponentPower}
+            onOpenPdfReport={(filterMode) => {
+              setPdfReportFilter(filterMode || 'SCHEDULE_ONLY');
+              setIsPdfReportOpen(true);
+            }}
+            onOpenPanelAssembly={() => setIsPanelAssemblyOpen(true)}
+          />
+        )}
+
         {activeView === 'SCHEMATIC' && (
           <SchematicView
             components={components}
             wires={wires}
             lang={lang}
             simulationState={simulationState}
-            onOpenPdfReport={() => setIsPdfReportOpen(true)}
+            onOpenPdfReport={() => {
+              setPdfReportFilter('ALL');
+              setIsPdfReportOpen(true);
+            }}
           />
         )}
 
@@ -691,7 +1309,10 @@ export default function App() {
             wires={wires}
             lang={lang}
             simulationState={simulationState}
-            onOpenPdfReport={() => setIsPdfReportOpen(true)}
+            onOpenPdfReport={() => {
+              setPdfReportFilter('ALL');
+              setIsPdfReportOpen(true);
+            }}
           />
         )}
       </div>
@@ -744,6 +1365,8 @@ export default function App() {
           thermalState={thermalState}
           gridVoltage={gridVoltage}
           numRails={numRails}
+          circuitLoads={circuitLoads}
+          initialFilter={pdfReportFilter}
           onClose={() => setIsPdfReportOpen(false)}
         />
       )}
@@ -753,6 +1376,71 @@ export default function App() {
         <WindowsUpdateModal
           lang={lang}
           onClose={() => setIsWindowsModalOpen(false)}
+        />
+      )}
+
+      {/* 9. Breaker List & Excel Panel Auto-Assembly Modal */}
+      {isPanelAssemblyOpen && (
+        <PanelAssemblyModal
+          lang={lang}
+          onClose={() => setIsPanelAssemblyOpen(false)}
+          onApplyAssembledPanel={handleApplyAssembledPanel}
+        />
+      )}
+
+      {/* 10. Wire Length & Placement Optimizer Modal */}
+      {isWireOptimizerOpen && (
+        <WireOptimizerModal
+          isOpen={isWireOptimizerOpen}
+          onClose={() => setIsWireOptimizerOpen(false)}
+          components={components}
+          wires={wires}
+          numRails={numRails}
+          lang={lang}
+          onApplyOptimization={handleApplyWireOptimization}
+        />
+      )}
+
+      {/* 11. Field Technician QR Passport Modal */}
+      {isQrModalOpen && (
+        <PanelQrModal
+          isOpen={isQrModalOpen}
+          onClose={() => setIsQrModalOpen(false)}
+          components={components}
+          wires={wires}
+          loads={circuitLoads}
+          numRails={numRails}
+          lang={lang}
+          onOpenTechnicianSummary={() => {
+            setIsQrModalOpen(false);
+            setIsTechnicianSummaryOpen(true);
+          }}
+        />
+      )}
+
+      {/* 12. Fullscreen Field Technician Web View */}
+      {isTechnicianSummaryOpen && (
+        <TechnicianSummaryView
+          components={components}
+          wires={wires}
+          loads={circuitLoads}
+          numRails={numRails}
+          lang={lang}
+          onSetLang={setLang}
+          onBackToEditor={() => {
+            setIsTechnicianSummaryOpen(false);
+            // Clean URL search param if present
+            if (typeof window !== 'undefined' && window.location.search.includes('view=tech_summary')) {
+              window.history.replaceState({}, '', window.location.pathname);
+            }
+          }}
+          panelTag="DB-MAIN-01"
+          projectName={lang === 'ka' ? 'ელექტრო გამანაწილებელი ფარი' : 'Main Electrical Distribution Board'}
+          projectSiteRef={lang === 'ka' ? 'PRJ-SITE-REF-01 (საპროექტო ობიექტი)' : 'PRJ-SITE-REF-01 (Project Site Reference)'}
+          initialObservations={projectObservations}
+          onSaveObservations={setProjectObservations}
+          initialPhotos={projectPhotos}
+          onSavePhotos={setProjectPhotos}
         />
       )}
     </div>

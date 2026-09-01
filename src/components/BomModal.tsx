@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   FileText,
+  FileSpreadsheet,
   Printer,
   Copy,
   Download,
@@ -9,6 +10,7 @@ import {
   AlertCircle,
   Package,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { Language, PlacedComponent, SimulationState, WireConnection } from '../types';
 import { COMPONENT_CATALOG, WIRE_COLORS, WIRE_GAUGES } from '../data/componentCatalog';
 import { TRANSLATIONS } from '../data/translations';
@@ -76,6 +78,69 @@ export const BomModal: React.FC<BomModalProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleExportBomExcel = () => {
+    const isKa = lang === 'ka';
+    const wb = XLSX.utils.book_new();
+    const rows: (string | number)[][] = [
+      [isKa ? 'ElectroPanel - ფარის სპეციფიკაცია და ხარჯთაღრიცხვა (BOM)' : 'ElectroPanel - Bill of Materials (BOM)'],
+      [isKa ? `დადგმული სიმძლავრე: ${(simulationState.totalPowerW / 1000).toFixed(2)} kW` : `Total Capacity: ${(simulationState.totalPowerW / 1000).toFixed(2)} kW`],
+      [isKa ? `მაქსიმალური დენი: ${simulationState.totalCurrentA} A` : `Max Current: ${simulationState.totalCurrentA} A`],
+      [isKa ? `DIN მოდულების ჯამი: ${totalDinUnits} მოდული` : `Total DIN Units: ${totalDinUnits} Modules`],
+      [],
+      [isKa ? '1. აღჭურვილობის სპეციფიკაცია' : '1. Equipment & Components'],
+      [
+        isKa ? '№' : 'No.',
+        isKa ? 'დასახელება' : 'Device Name',
+        isKa ? 'კატეგორია' : 'Category',
+        isKa ? 'DIN მოდული' : 'DIN Units',
+        isKa ? 'რაოდენობა (ცალი)' : 'Quantity (pcs)',
+        isKa ? 'სავარაუდო ფასი ($)' : 'Est. Price ($)',
+      ],
+    ];
+
+    let itemIdx = 1;
+    Object.entries(componentSummary).forEach(([typeId, qtyVal]) => {
+      const qty = Number(qtyVal);
+      const meta = catalogMap.get(typeId);
+      if (!meta) return;
+      const basePrice = meta.category === 'RCD_DEVICE' || meta.category === 'RCBO_DEVICE' ? 45 : meta.category === 'VOLTAGE_RELAY' ? 55 : 18;
+      rows.push([
+        itemIdx++,
+        isKa ? meta.nameKa : meta.nameEn,
+        meta.category,
+        meta.dinUnits * qty,
+        qty,
+        basePrice * qty,
+      ]);
+    });
+
+    rows.push([]);
+    rows.push([isKa ? '2. სამონტაჟო მავთულების გაანგარიშება' : '2. Wiring Materials & Sizing']);
+    rows.push([
+      isKa ? 'სადენის ტიპი / ფერი' : 'Wire Type / Color',
+      isKa ? 'კვეთა (მმ²)' : 'Gauge (mm²)',
+      isKa ? 'შეერთებების რაოდენობა' : 'Connections Count',
+      isKa ? 'სავარაუდო მეტრაჟი (მეტრი)' : 'Est. Length (meters)',
+    ]);
+
+    Object.entries(wireSummary).forEach(([key, countVal]) => {
+      const count = Number(countVal);
+      const [colorType, gaugeStr] = key.split('_');
+      const colorObj = WIRE_COLORS.find((c) => c.type === colorType);
+      rows.push([
+        isKa ? colorObj?.nameKa || colorType : colorObj?.nameEn || colorType,
+        `${gaugeStr} mm²`,
+        count,
+        Number((count * 0.4).toFixed(1)),
+      ]);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{ wch: 6 }, { wch: 36 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws, isKa ? 'BOM სპეციფიკაცია' : 'BOM Specification');
+    XLSX.writeFile(wb, `ElectroPanel_BOM_Specification_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
   return (
     <div className="flex-1 bg-slate-950 p-6 overflow-auto flex flex-col items-center select-none text-slate-100">
       <div className="w-full max-w-4xl bg-slate-900 border-2 border-slate-700 rounded-3xl p-8 shadow-2xl relative flex flex-col gap-6">
@@ -98,6 +163,14 @@ export const BomModal: React.FC<BomModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleExportBomExcel}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition shadow-md shadow-emerald-600/20 cursor-pointer"
+              title="Download Microsoft Excel spreadsheet (.xlsx)"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>{lang === 'ka' ? 'Excel-ში ექსპორტი (.xlsx)' : 'Export Excel'}</span>
+            </button>
             <button
               onClick={handleCopy}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition"
